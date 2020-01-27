@@ -21,16 +21,19 @@ def helpMessage() {
     nextflow run nf-core/hgtsimulation --reads '*_R{1,2}.fastq.gz' -profile docker
 
     Mandatory arguments:
-      --reads                       Path to input data (must be surrounded with quotes)
+      --recipients                  Path to input data (must be surrounded with quotes) of the recipient genomes.
+      --plasmids                    Path to plasmid FASTA files.
       -profile                      Configuration profile to use. Can use multiple (comma separated)
                                     Available: conda, docker, singularity, awsbatch, test and more.
 
     Options:
-      --genome                      Name of iGenomes reference
-      --singleEnd                   Specifies that the input is single end reads
-
-    References                      If not specified in the configuration file or you wish to overwrite any of the references.
-      --fasta                       Path to Fasta reference
+      --num_reads                   Number of reads to simulate per sample.
+      --read_length                 Length of simulated reads
+      --min_insert                  Minimum simulated insert length
+      --max_insert                  Maximum simulated insert length
+      --adapter1                    Simulated reads adapter sequence for read 1
+      --adapter2                    Simulated reads adapter sequence for read 2
+      --unicycler_args              Arguments for Unicycler. Must be a string.
 
     Other options:
       --outdir                      The output directory where the results will be saved
@@ -55,21 +58,6 @@ if (params.help) {
  * SET UP CONFIGURATION VARIABLES
  */
 
-// Check if genome exists in the config file
-if (params.genomes && params.genome && !params.genomes.containsKey(params.genome)) {
-    exit 1, "The provided genome '${params.genome}' is not available in the iGenomes file. Currently the available genomes are ${params.genomes.keySet().join(", ")}"
-}
-
-// TODO nf-core: Add any reference files that are needed
-// Configurable reference genomes
-//
-// NOTE - THIS IS NOT USED IN THIS PIPELINE, EXAMPLE ONLY
-// If you want to use the channel below in a process, define the following:
-//   input:
-//   file fasta from ch_fasta
-//
-params.fasta = params.genome ? params.genomes[ params.genome ].fasta ?: false : false
-if (params.fasta) { ch_fasta = file(params.fasta, checkIfExists: true) }
 
 // Has the run name been specified by the user?
 //  this has the bonus effect of catching both -name and --name
@@ -93,28 +81,10 @@ ch_multiqc_config = file(params.multiqc_config, checkIfExists: true)
 ch_output_docs = file("$baseDir/docs/output.md", checkIfExists: true)
 
 /*
- * Create a channel for input read files
+ * Create a channel for input FASTA files
  */
-if (params.readPaths) {
-    if (params.singleEnd) {
-        Channel
-            .from(params.readPaths)
-            .map { row -> [ row[0], [ file(row[1][0], checkIfExists: true) ] ] }
-            .ifEmpty { exit 1, "params.readPaths was empty - no input files supplied" }
-            .into { read_files_fastqc; read_files_trimming }
-    } else {
-        Channel
-            .from(params.readPaths)
-            .map { row -> [ row[0], [ file(row[1][0], checkIfExists: true), file(row[1][1], checkIfExists: true) ] ] }
-            .ifEmpty { exit 1, "params.readPaths was empty - no input files supplied" }
-            .into { read_files_fastqc; read_files_trimming }
-    }
-} else {
-    Channel
-        .fromFilePairs( params.reads, size: params.singleEnd ? 1 : 2 )
-        .ifEmpty { exit 1, "Cannot find any reads matching: ${params.reads}\nNB: Path needs to be enclosed in quotes!\nIf this is single-end data, please specify --singleEnd on the command line." }
-        .into { read_files_fastqc; read_files_trimming }
-}
+recipient_ch = Channel.fromPath(params.recipients)
+plasmids_ch = Channel.fromPath(params.plasmids)
 
 // Header log info
 log.info nfcoreHeader()
@@ -122,9 +92,8 @@ def summary = [:]
 if (workflow.revision) summary['Pipeline Release'] = workflow.revision
 summary['Run Name']         = custom_runName ?: workflow.runName
 // TODO nf-core: Report custom parameters here
-summary['Reads']            = params.reads
-summary['Fasta Ref']        = params.fasta
-summary['Data Type']        = params.singleEnd ? 'Single-End' : 'Paired-End'
+summary['Fasta']            = params.fasta
+summary['Plasmids']        = params.plasmids
 summary['Max Resources']    = "$params.max_memory memory, $params.max_cpus cpus, $params.max_time time per job"
 if (workflow.containerEngine) summary['Container'] = "$workflow.containerEngine - $workflow.container"
 summary['Output dir']       = params.outdir
@@ -194,50 +163,151 @@ process get_software_versions {
 }
 
 /*
- * STEP 1 - FastQC
+ * STEP 1 - CONCATENATE FASTA AND PLASMID
  */
-process fastqc {
-    tag "$name"
-    label 'process_medium'
-    publishDir "${params.outdir}/fastqc", mode: 'copy',
-        saveAs: { filename -> filename.indexOf(".zip") > 0 ? "zips/$filename" : "$filename" }
+process concatenate_fasta_plasmid {
+    publishDir "${params.outdir}/${plasmid.getSimpleName()}/${recipient.getSimpleName()}", mode: 'copy'
 
     input:
-    set val(name), file(reads) from read_files_fastqc
+    each path(recipient) from recipients_ch
+    each path(plasmid) from plasmids_ch
 
     output:
-    file "*_fastqc.{zip,html}" into fastqc_results
+    tuple(plasmid.getSimpleName(), recipient.getSimpleName(), path("${plasmid.getSimpleName()}_${recipient.getSimpleName()}.fasta")) into readsim_ch
 
     script:
     """
-    fastqc --quiet --threads $task.cpus $reads
+    cat ${recipient} ${plasmid} > ${plasmid.getSimpleName()}_${recipient.getSimpleName()}.fasta
+    """
+}
+
+/* 
+ * STEP 2 - SIMULATE READS
+ */
+process simulate_reads {
+    publishDir "${params.outdir}/${plasmid}/${recipient}/simulated_reads", mode: 'copy'
+
+    input:
+    tuple(plasmid, recipient, path(fasta)) from readsim_ch
+
+    output:
+    tuple(plasmid, recipient, path("${fasta.getSimpleName()}*.fastq.gz)")) into fastp_ch
+    
+    script:
+    """
+    randomreads.sh ref=${fasta} out1=${fasta.getSimpleName()}_1.fastq.gz out2=${fasta.getSimpleName()}_2.fastq.gz reads=${params.num_reads} length=${params.read_length} illuminanames=t paired=t mininsert=${params.min_insert} maxinsert=${params.maxinsert} fragadapter=${params.adapter1} fragadapter2=${params.adapter2}
     """
 }
 
 /*
- * STEP 2 - MultiQC
+ * STEP 3 - FILTER
  */
-process multiqc {
-    publishDir "${params.outdir}/MultiQC", mode: 'copy'
+process fastp {
+    publishDir "${params.outdir}/${plasmid}/${recipient}/fastp", mode: 'copy'
 
     input:
-    file multiqc_config from ch_multiqc_config
-    // TODO nf-core: Add in log files from your new processes for MultiQC to find!
-    file ('fastqc/*') from fastqc_results.collect().ifEmpty([])
-    file ('software_versions/*') from software_versions_yaml.collect()
-    file workflow_summary from create_workflow_summary(summary)
+    tuple(plasmid, recipient, path(reads)) from fastp_ch
 
     output:
-    file "*multiqc_report.html" into multiqc_report
-    file "*_data"
-    file "multiqc_plots"
+    tuple(plasmid, recipient, path("trim*.fastq.gz")) into assembly_ch
+    path("*fastp.{json,html}")
 
     script:
-    rtitle = custom_runName ? "--title \"$custom_runName\"" : ''
-    rfilename = custom_runName ? "--filename " + custom_runName.replaceAll('\\W','_').replaceAll('_+','_') + "_multiqc_report" : ''
-    // TODO nf-core: Specify which MultiQC modules to use with -m for a faster run time
     """
-    multiqc -f $rtitle $rfilename --config $multiqc_config .
+    fastp -i ${reads[0]} -I ${reads[1]} -o trim_${reads[0]} -O trim_${reads[1]} -w ${task.cpus} --json ${plasmid}_${recipient}_fastp.json --html ${plasmid}_${recipient}_fastp.html
+    """
+}
+
+/*
+ * STEP 3 - ASSEMBLE
+ */
+process unicycler {
+    tag "${plasmid}_${recipient}"
+    publishDir "${params.outdir}/${plasmid}/${recipient}", mode: 'copy'
+
+    input:
+    tuple(plasmid, recipient, path(reads)) from assembly_ch
+
+    output:
+    tuple (plasmid, recipient, path("${plasmid}_${recipient}_assembly.fasta"), path("${plasmid}_${recipient}_assembly.gfa")) into (quast_ch, abricate_ch)
+    path("${plasmid}_${recipient}_assembly.gfa")
+    path("${plasmid}_${recipient}_assembly.png")
+    path("${plasmid}_${recipient}_unicycler.log")
+
+    script:
+    """
+    unicycler --threads ${task.cpus} ${params.unicycler_args} --keep 0 -o . -1 ${reads[0]} -2 ${reads[1]}
+    mv unicycler.log ${plasmid}_${recipient}_unicycler.log
+    mv assembly.gfa ${plasmid}_${recipient}_assembly.gfa
+    mv assembly.fasta ${plasmid}_${recipient}_assembly.fasta
+    Bandage image ${plasmid}_${recipient}_assembly.gfa ${plasmid}_${recipient}_assembly.png
+    """
+}
+
+/*
+ * STEP 4 - QUAST
+ */
+process quast {
+    tag "${plasmid}_${recipient}"
+    publishDir "${params.outdir}/${plasmid}/${recipient}/quast", mode: 'copy'
+
+    input:
+    tuple (plasmid, recipient, path(assembly), path(gfa)) from quast_ch
+    
+    output:
+    path("${plasmid}_${recipient}_assembly_QC/")
+    path("${plasmid}_${recipient}_assembly_QC/report.tsv") into quast_log_ch
+    path("v_quast.txt") into quast_version_ch
+
+    script:
+    """
+    quast -t ${task.cpus} -o ${plasmid}_${recipient}_assembly_QC ${assembly}
+    quast -v > v_quast.txt
+    """
+}
+
+/*
+ * STEP 5 - ABRICATE
+ */
+process abricate {
+    tag "${plasmid}_${recipient}"
+    publishDir "${params.outdir}/${plasmid}/${recipient}/abricate", mode: 'copy'
+
+    input:
+    tuple(plasmid, recipient, path(assembly), path(gfa)) from abricate_ch
+    
+    output:
+    tuple(plasmid, recipient, path(assembly), path(gfa), path("${plasmid}_${recipient}_assembly.genes")) into amr_ch
+
+    script:
+    """
+    abricate --threads ${task.cpus} --db ncbi ${assembly} > ${plasmid}_${recipient}_assembly.amr
+    cat ${plasmid}_${recipient}_assembly.amr | awk 'FNR > 1 {print \$6}' > ${plasmid}_${recipient}_assembly.genes
+    """
+    
+}
+
+/* 
+ * STEP 6 - ORGANIZE BY GENE
+ */
+process sort_genes {
+    publishDir "${params.outdir}", mode: 'copy'
+
+    input:
+    tuple(plasmid, recipient, path(assembly), path(gfa), path(genes)) from amr_ch 
+    
+    output:
+    path("*/")
+    path("*/*.{fasta,gfa}")
+
+    script:
+    """
+    while read p
+    do
+    mkdir $p
+    cp $assembly $p
+    cp $gfa $p
+    done < $genes
     """
 }
 
