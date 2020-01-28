@@ -92,7 +92,7 @@ def summary = [:]
 if (workflow.revision) summary['Pipeline Release'] = workflow.revision
 summary['Run Name']         = custom_runName ?: workflow.runName
 // TODO nf-core: Report custom parameters here
-summary['Fasta']            = params.fasta
+summary['Recipients']       = params.recipients
 summary['Plasmids']        = params.plasmids
 summary['Max Resources']    = "$params.max_memory memory, $params.max_cpus cpus, $params.max_time time per job"
 if (workflow.containerEngine) summary['Container'] = "$workflow.containerEngine - $workflow.container"
@@ -166,18 +166,18 @@ process get_software_versions {
  * STEP 1 - CONCATENATE FASTA AND PLASMID
  */
 process concatenate_fasta_plasmid {
-    publishDir "${params.outdir}/${plasmid.getSimpleName()}/${recipient.getSimpleName()}", mode: 'copy'
+    publishDir "${params.outdir}/simulated_genomes/${plasmid.getBaseName()}/${recipient.getBaseName()}", mode: 'copy'
 
     input:
     each path(recipient) from recipients_ch
     each path(plasmid) from plasmids_ch
 
     output:
-    tuple(val ("${plasmid.getSimpleName()}"), val ("${recipient.getSimpleName()}"), path("${plasmid.getSimpleName()}_${recipient.getSimpleName()}.fasta")) into readsim_ch
+    tuple(val ("${plasmid.getBaseName()}"), val ("${recipient.getBaseName()}"), path("${plasmid.getBaseName()}_${recipient.getBaseName()}.fasta")) into readsim_ch
 
     script:
     """
-    cat ${recipient} ${plasmid} > ${plasmid.getSimpleName()}_${recipient.getSimpleName()}.fasta
+    cat ${recipient} ${plasmid} > ${plasmid.getBaseName()}_${recipient.getBaseName()}.fasta
     """
 }
 
@@ -185,17 +185,17 @@ process concatenate_fasta_plasmid {
  * STEP 2 - SIMULATE READS
  */
 process simulate_reads {
-    publishDir "${params.outdir}/${plasmid}/${recipient}/simulated_reads", mode: 'copy'
+    publishDir "${params.outdir}/simulated_reads/${plasmid}/${recipient}", mode: 'copy'
 
     input:
     tuple(plasmid, recipient, path(fasta)) from readsim_ch
 
     output:
-    tuple(plasmid, recipient, path("${fasta.getSimpleName()}_*.fastq.gz")) into fastp_ch
+    tuple(plasmid, recipient, path("${fasta.getBaseName()}_*.fastq.gz")) into fastp_ch
     
     script:
     """
-    randomreads.sh ref=${fasta} out1=${fasta.getSimpleName()}_1.fastq.gz out2=${fasta.getSimpleName()}_2.fastq.gz reads=${params.num_reads} length=${params.read_length} illuminanames=t paired=t mininsert=${params.min_insert} maxinsert=${params.max_insert} fragadapter=${params.adapter1} fragadapter2=${params.adapter2}
+    randomreads.sh ref=${fasta} out1=${fasta.getBaseName()}_1.fastq.gz out2=${fasta.getBaseName()}_2.fastq.gz reads=${params.num_reads} length=${params.read_length} illuminanames=t paired=t mininsert=${params.min_insert} maxinsert=${params.max_insert} fragadapter=${params.adapter1} fragadapter2=${params.adapter2}
     """
 }
 
@@ -203,7 +203,7 @@ process simulate_reads {
  * STEP 3 - FILTER
  */
 process fastp {
-    publishDir "${params.outdir}/${plasmid}/${recipient}/fastp", mode: 'copy'
+    publishDir "${params.outdir}/fastp/${plasmid}/${recipient}/", mode: 'copy'
 
     input:
     tuple(plasmid, recipient, path(reads)) from fastp_ch
@@ -223,7 +223,7 @@ process fastp {
  */
 process unicycler {
     tag "${plasmid}_${recipient}"
-    publishDir "${params.outdir}/${plasmid}/${recipient}", mode: 'copy'
+    publishDir "${params.outdir}/unicycler/${plasmid}/${recipient}", mode: 'copy'
 
     input:
     tuple(plasmid, recipient, path(reads)) from assembly_ch
@@ -249,7 +249,7 @@ process unicycler {
  */
 process quast {
     tag "${plasmid}_${recipient}"
-    publishDir "${params.outdir}/${plasmid}/${recipient}/quast", mode: 'copy'
+    publishDir "${params.outdir}/quast/${plasmid}/${recipient}", mode: 'copy'
 
     input:
     tuple (plasmid, recipient, path(assembly), path(gfa)) from quast_ch
@@ -271,7 +271,7 @@ process quast {
  */
 process abricate {
     tag "${plasmid}_${recipient}"
-    publishDir "${params.outdir}/${plasmid}/${recipient}/abricate", mode: 'copy'
+    publishDir "${params.outdir}/abricate/${plasmid}/${recipient}", mode: 'copy'
 
     input:
     tuple(plasmid, recipient, path(assembly), path(gfa)) from abricate_ch
@@ -279,11 +279,11 @@ process abricate {
     output:
     tuple(plasmid, recipient, path(assembly), path(gfa), path("${plasmid}_${recipient}_assembly.genes")) into amr_ch
 
-    script:
-    """
-    abricate --threads ${task.cpus} --db ncbi ${assembly} > ${plasmid}_${recipient}_assembly.amr
-    cat ${plasmid}_${recipient}_assembly.amr | awk 'FNR > 1 {print \$6}' > ${plasmid}_${recipient}_assembly.genes
-    """
+    shell:
+    '''
+    abricate --threads !{task.cpus} --db ncbi !{assembly} > !{plasmid}_!{recipient}_assembly.amr
+    cat !{plasmid}_!{recipient}_assembly.amr | awk 'FNR > 1 { print $6}' > !{plasmid}_!{recipient}_assembly.genes
+    '''
     
 }
 
@@ -291,22 +291,21 @@ process abricate {
  * STEP 6 - ORGANIZE BY GENE
  */
 process sort_genes {
-    publishDir "${params.outdir}", mode: 'copy'
+    publishDir "${params.outdir}/genes", mode: 'copy'
 
     input:
     tuple(plasmid, recipient, path(assembly), path(gfa), path(genes)) from amr_ch 
     
     output:
-    path("*/")
     path("*/*.{fasta,gfa}")
 
     script:
     """
     while read p
     do
-    mkdir $p
-    cp $assembly $p
-    cp $gfa $p
+    mkdir \$p
+    cp $assembly \$p
+    cp $gfa \$p
     done < $genes
     """
 }
