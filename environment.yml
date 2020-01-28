@@ -2,8 +2,8 @@
 #   conda env create -f environment.yml
 name: nf-core-hgtsimulation-1.0dev
 channels:
-  - conda-forge
   - bioconda
+  - conda-forge
   - defaults
 dependencies:
   # TODO nf-core: Add required software dependencies here
@@ -11,6 +11,7 @@ dependencies:
   - bioconda::multiqc=1.7
   - conda-forge::r-markdown=1.1
   - conda-forge::r-base=3.6.1
+  - fastp
   - unicycler
   - quast
   - bbmap

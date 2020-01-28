@@ -83,7 +83,7 @@ ch_output_docs = file("$baseDir/docs/output.md", checkIfExists: true)
 /*
  * Create a channel for input FASTA files
  */
-recipient_ch = Channel.fromPath(params.recipients)
+recipients_ch = Channel.fromPath(params.recipients)
 plasmids_ch = Channel.fromPath(params.plasmids)
 
 // Header log info
@@ -173,7 +173,7 @@ process concatenate_fasta_plasmid {
     each path(plasmid) from plasmids_ch
 
     output:
-    tuple(plasmid.getSimpleName(), recipient.getSimpleName(), path("${plasmid.getSimpleName()}_${recipient.getSimpleName()}.fasta")) into readsim_ch
+    tuple(val ("${plasmid.getSimpleName()}"), val ("${recipient.getSimpleName()}"), path("${plasmid.getSimpleName()}_${recipient.getSimpleName()}.fasta")) into readsim_ch
 
     script:
     """
@@ -191,11 +191,11 @@ process simulate_reads {
     tuple(plasmid, recipient, path(fasta)) from readsim_ch
 
     output:
-    tuple(plasmid, recipient, path("${fasta.getSimpleName()}*.fastq.gz)")) into fastp_ch
+    tuple(plasmid, recipient, path("${fasta.getSimpleName()}_*.fastq.gz")) into fastp_ch
     
     script:
     """
-    randomreads.sh ref=${fasta} out1=${fasta.getSimpleName()}_1.fastq.gz out2=${fasta.getSimpleName()}_2.fastq.gz reads=${params.num_reads} length=${params.read_length} illuminanames=t paired=t mininsert=${params.min_insert} maxinsert=${params.maxinsert} fragadapter=${params.adapter1} fragadapter2=${params.adapter2}
+    randomreads.sh ref=${fasta} out1=${fasta.getSimpleName()}_1.fastq.gz out2=${fasta.getSimpleName()}_2.fastq.gz reads=${params.num_reads} length=${params.read_length} illuminanames=t paired=t mininsert=${params.min_insert} maxinsert=${params.max_insert} fragadapter=${params.adapter1} fragadapter2=${params.adapter2}
     """
 }
 
