@@ -11,8 +11,9 @@ dependencies:
   - bioconda::multiqc=1.7
   - conda-forge::r-markdown=1.1
   - conda-forge::r-base=3.6.1
-  - fastp
-  - unicycler
-  - quast
-  - bbmap
-  - abricate 
+  - fastp=0.20.0
+  - unicycler=0.4.7
+  - quast=5.0.2
+  - bbmap=38.75
+  - abricate=0.9.8
+  - bandage=0.8.1
