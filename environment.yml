@@ -12,7 +12,7 @@ dependencies:
   - conda-forge::r-markdown=1.1
   - conda-forge::r-base=3.6.1
   - fastp=0.20.0
-  - unicycler=0.4.7
+  - unicycler=0.4.4
   - quast=5.0.2
   - bbmap=38.75
   - abricate=0.9.8
