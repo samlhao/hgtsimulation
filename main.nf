@@ -31,8 +31,8 @@ def helpMessage() {
       --read_length                 Length of simulated reads
       --min_insert                  Minimum simulated insert length
       --max_insert                  Maximum simulated insert length
-      --adapter1                    Simulated reads adapter sequence for read 1
-      --adapter2                    Simulated reads adapter sequence for read 2
+      --adapter_1                    Simulated reads adapter sequence for read 1
+      --adapter_2                    Simulated reads adapter sequence for read 2
       --unicycler_args              Arguments for Unicycler. Must be a string.
 
     Other options:
@@ -140,27 +140,27 @@ ${summary.collect { k,v -> "            <dt>$k</dt><dd><samp>${v ?: '<span style
 /*
  * Parse software version numbers
  */
-process get_software_versions {
-    publishDir "${params.outdir}/pipeline_info", mode: 'copy',
-        saveAs: { filename ->
-            if (filename.indexOf(".csv") > 0) filename
-            else null
-        }
-
-    output:
-    file 'software_versions_mqc.yaml' into software_versions_yaml
-    file "software_versions.csv"
-
-    script:
-    // TODO nf-core: Get all tools to print their version number here
-    """
-    echo $workflow.manifest.version > v_pipeline.txt
-    echo $workflow.nextflow.version > v_nextflow.txt
-    fastqc --version > v_fastqc.txt
-    multiqc --version > v_multiqc.txt
-    scrape_software_versions.py &> software_versions_mqc.yaml
-    """
-}
+//process get_software_versions {
+//    publishDir "${params.outdir}/pipeline_info", mode: 'copy',
+//        saveAs: { filename ->
+//            if (filename.indexOf(".csv") > 0) filename
+//            else null
+//        }
+//
+//    output:
+//    file 'software_versions_mqc.yaml' into software_versions_yaml
+//    file "software_versions.csv"
+//
+//    script:
+//    // TODO nf-core: Get all tools to print their version number here
+//    """
+//    echo $workflow.manifest.version > v_pipeline.txt
+//    echo $workflow.nextflow.version > v_nextflow.txt
+//    fastp --version > v_fastp.txt
+//    abricate --version > v_abricate.txt
+//    scrape_software_versions.py &> software_versions_mqc.yaml
+//    """
+//}
 
 /*
  * STEP 1 - CONCATENATE FASTA AND PLASMID
@@ -195,7 +195,7 @@ process simulate_reads {
     
     script:
     """
-    randomreads.sh ref=${fasta} out1=${fasta.getBaseName()}_1.fastq.gz out2=${fasta.getBaseName()}_2.fastq.gz reads=${params.num_reads} length=${params.read_length} illuminanames=t paired=t mininsert=${params.min_insert} maxinsert=${params.max_insert} fragadapter=${params.adapter1} fragadapter2=${params.adapter2}
+    randomreads.sh ref=${fasta} out1=${fasta.getBaseName()}_1.fastq.gz out2=${fasta.getBaseName()}_2.fastq.gz reads=${params.num_reads} length=${params.read_length} illuminanames=t paired=t mininsert=${params.min_insert} maxinsert=${params.max_insert} fragadapter=${params.adapter_1} fragadapter2=${params.adapter_2}
     """
 }
 
@@ -222,6 +222,7 @@ process fastp {
  * STEP 3 - ASSEMBLE
  */
 process unicycler {
+    label "process_high"
     tag "${plasmid}_${recipient}"
     publishDir "${params.outdir}/unicycler/${plasmid}/${recipient}", mode: 'copy'
 
@@ -231,16 +232,14 @@ process unicycler {
     output:
     tuple (plasmid, recipient, path("${plasmid}_${recipient}_assembly.fasta"), path("${plasmid}_${recipient}_assembly.gfa")) into (quast_ch, abricate_ch)
     path("${plasmid}_${recipient}_assembly.gfa")
-    path("${plasmid}_${recipient}_assembly.png")
     path("${plasmid}_${recipient}_unicycler.log")
 
     script:
     """
     unicycler --threads ${task.cpus} ${params.unicycler_args} --keep 0 -o . -1 ${reads[0]} -2 ${reads[1]}
-    mv unicycler.log ${plasmid}_${recipient}_unicycler.log
-    mv assembly.gfa ${plasmid}_${recipient}_assembly.gfa
-    mv assembly.fasta ${plasmid}_${recipient}_assembly.fasta
-    Bandage image ${plasmid}_${recipient}_assembly.gfa ${plasmid}_${recipient}_assembly.png
+    cp unicycler.log ${plasmid}_${recipient}_unicycler.log
+    cp assembly.gfa ${plasmid}_${recipient}_assembly.gfa
+    cp assembly.fasta ${plasmid}_${recipient}_assembly.fasta
     """
 }
 
@@ -257,12 +256,10 @@ process quast {
     output:
     path("${plasmid}_${recipient}_assembly_QC/")
     path("${plasmid}_${recipient}_assembly_QC/report.tsv") into quast_log_ch
-    path("v_quast.txt") into quast_version_ch
 
     script:
     """
     quast -t ${task.cpus} -o ${plasmid}_${recipient}_assembly_QC ${assembly}
-    quast -v > v_quast.txt
     """
 }
 
@@ -303,7 +300,7 @@ process sort_genes {
     """
     while read p
     do
-    mkdir \$p
+    mkdir -p \$p
     cp $assembly \$p
     cp $gfa \$p
     done < $genes
