@@ -34,6 +34,7 @@ def helpMessage() {
       --adapter_1                    Simulated reads adapter sequence for read 1
       --adapter_2                    Simulated reads adapter sequence for read 2
       --unicycler_args              Arguments for Unicycler. Must be a string.
+      --linear                      Perform linear concatenation instead of a multi-FASTA
 
     Other options:
       --outdir                      The output directory where the results will be saved
@@ -176,8 +177,16 @@ process concatenate_fasta_plasmid {
     tuple(val ("${plasmid.getBaseName()}"), val ("${recipient.getBaseName()}"), path("${plasmid.getBaseName()}_${recipient.getBaseName()}.fasta")) into readsim_ch
 
     script:
+    if (!params.linear_concat)
     """
     cat ${recipient} ${plasmid} > ${plasmid.getBaseName()}_${recipient.getBaseName()}.fasta
+    """
+
+    else
+    """
+    echo '>${plasmid.getBaseName()}_{recipient.getBaseName()}' > ${plasmid.getBaseName()}_${recipient.getBaseName()}.fasta
+    awk 'FNR > 1' ${recipient} | tr -d '\n' >> ${plasmid.getBaseName()}_${recipient.getBaseName()}.fasta
+    awk 'FNR > 1' ${plasmid} >> ${plasmid.getBaseName()}_${recipient.getBaseName()}.fasta
     """
 }
 
